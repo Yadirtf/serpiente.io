@@ -5,6 +5,14 @@ import 'package:serpiente_io/src/game/models/snake_direction.dart';
 /// Controla el movimiento de una serpiente con ángulo continuo de 360°,
 /// suavizado de giro por inercia y boost con consumo de masa.
 ///
+/// ### Waypoint Trail System
+/// En lugar de mover cada segmento hacia el anterior por distancia mínima
+/// (lo que causaba "atajos" en los giros), ahora se mantiene un historial
+/// de posiciones de la cabeza. Cada segmento del cuerpo se coloca en el
+/// punto del historial donde el arco acumulado desde la cabeza supera
+/// `segmentDistance * i`, garantizando que el cuerpo sigue **exactamente**
+/// el mismo recorrido que trazó la cabeza.
+///
 /// Diseñado para ser usado tanto por el jugador como por los bots,
 /// lo que permite escalar hacia un modo multijugador online en el futuro.
 class SnakeController {
@@ -32,6 +40,17 @@ class SnakeController {
 
   /// Segmentos eliminados pendientes de convertir en orbes (para consumo de masa).
   int _pendingMassDrop = 0;
+
+  // ── Waypoint Trail ────────────────────────────────────────────────────────
+  /// Historial de posiciones de la cabeza, de más reciente a más antiguo.
+  final List<Vector2> _posHistory = [];
+
+  /// Granularidad del historial: un punto se añade cada vez que la cabeza
+  /// avanza esta distancia. Valores bajos → curvas más suaves pero más memoria.
+  static const double _kHistoryGranularity = 2.0;
+
+  /// Distancia acumulada desde el último punto del historial.
+  double _sinceLastHistoryPoint = 0.0;
 
   SnakeController({
     this.speed = 140,
@@ -63,39 +82,93 @@ class SnakeController {
     return n;
   }
 
+  /// Reinicia el historial de posiciones (útil al hacer respawn).
+  void resetHistory(List<Vector2> initialSegments) {
+    _posHistory.clear();
+    _sinceLastHistoryPoint = 0;
+    // Precarga el historial con las posiciones iniciales para que el cuerpo
+    // aparezca correctamente posicionado desde el primer frame.
+    for (final seg in initialSegments) {
+      _posHistory.add(seg.clone());
+    }
+  }
+
   /// Actualiza el ángulo actual acercándolo al objetivo respetando la
   /// velocidad de giro máxima. Retorna los segmentos actualizados.
   List<Vector2> move(List<Vector2> segments, double dt) {
     if (segments.isEmpty) return segments;
 
-    // ── 1. Suavizar ángulo hacia el objetivo ───────────────────────────────
+    // ── 1. Suavizar ángulo hacia el objetivo ──────────────────────────────
     final angleDiff = _angleDiff(_targetAngle, _currentAngle);
     final maxDelta = maxTurnSpeed * dt;
     final step = angleDiff.clamp(-maxDelta, maxDelta);
     _currentAngle = _normalizeAngle(_currentAngle + step);
 
-    // ── 2. Calcular velocidad ───────────────────────────────────────────────
+    // ── 2. Calcular velocidad ─────────────────────────────────────────────
     final effectiveSpeed = isBoosting ? speed * boostMultiplier : speed;
 
-    // ── 3. Mover cabeza en la dirección actual ─────────────────────────────
+    // ── 3. Mover cabeza en la dirección actual ────────────────────────────
     final head = segments.first.clone();
     final direction = Vector2(cos(_currentAngle), sin(_currentAngle));
-    head.addScaled(direction, effectiveSpeed * dt);
+    final frameDist = effectiveSpeed * dt;
+    head.addScaled(direction, frameDist);
 
-    // ── 4. Actualizar cadena de segmentos (trail system) ──────────────────
-    final List<Vector2> next = [head];
-    for (var i = 1; i < segments.length; i++) {
-      final prev = next[i - 1];
-      final cur = segments[i].clone();
-      final separation = prev - cur;
-      final dist = separation.length;
-      if (dist > segmentDistance) {
-        cur.setFrom(prev - separation.normalized() * segmentDistance);
-      }
-      next.add(cur);
+    // ── 4. Actualizar historial de posiciones de la cabeza ────────────────
+    // Inicializar historial si está vacío.
+    if (_posHistory.isEmpty) {
+      _posHistory.add(head.clone());
     }
 
-    // ── 5. Consumo de masa durante boost ──────────────────────────────────
+    _sinceLastHistoryPoint += frameDist;
+    if (_sinceLastHistoryPoint >= _kHistoryGranularity) {
+      _sinceLastHistoryPoint = 0;
+      _posHistory.insert(0, head.clone());
+    } else {
+      // Actualizar el punto más reciente (índice 0) sin añadir uno nuevo.
+      _posHistory[0] = head.clone();
+    }
+
+    // ── 5. Colocar segmentos del cuerpo siguiendo el historial (trail) ────
+    final List<Vector2> next = [head];
+    int historyIdx = 0;
+    double arcAccum = 0.0;
+
+    for (var segI = 1; segI < segments.length; segI++) {
+      final targetArc = segmentDistance * segI.toDouble();
+
+      // Avanzar por el historial hasta alcanzar el arco acumulado deseado.
+      while (historyIdx + 1 < _posHistory.length) {
+        final a = _posHistory[historyIdx];
+        final b = _posHistory[historyIdx + 1];
+        final d = a.distanceTo(b);
+        if (arcAccum + d >= targetArc) {
+          // Interpolación lineal para posicionamiento exacto.
+          final t = (targetArc - arcAccum) / (d == 0 ? 1 : d);
+          next.add(Vector2(
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+          ));
+          break;
+        }
+        arcAccum += d;
+        historyIdx++;
+      }
+
+      // Si el historial es más corto que la serpiente, usar el último punto.
+      if (next.length <= segI) {
+        next.add(_posHistory.last.clone());
+      }
+    }
+
+    // ── 6. Podar el historial para no crecer indefinidamente ──────────────
+    // Máximo de puntos necesarios = total de arco de la serpiente / granularidad + margen.
+    final maxHistoryLen =
+        ((segments.length * segmentDistance) / _kHistoryGranularity).ceil() + 60;
+    if (_posHistory.length > maxHistoryLen) {
+      _posHistory.removeRange(maxHistoryLen, _posHistory.length);
+    }
+
+    // ── 7. Consumo de masa durante boost ──────────────────────────────────
     // Cada 0.35 segundos de boost se elimina 1 segmento de la cola.
     if (isBoosting && next.length > 6) {
       _boostMassTimer += dt;

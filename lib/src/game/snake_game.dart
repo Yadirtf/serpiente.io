@@ -56,6 +56,13 @@ class ArenaBackgroundComponent extends PositionComponent {
 /// Usando el sistema World + CameraComponent de Flame:
 /// Todos los elementos del mapa (serpiente, bots, orbes, fondo) se agregan a [world]
 /// y la cámara los enfoca dinámicamente en coordenadas de mundo.
+///
+/// ### Cambios clave respecto a la versión anterior:
+/// - Al morir, el juego **no se pausa** → los bots siguen moviéndose.
+/// - La cámara hace un leve desplazamiento hacia arriba para que el jugador
+///   vea la acción mientras el modal de Game Over está visible.
+/// - [respawn()] recrea al jugador en posición segura sin reiniciar el mundo.
+/// - Las colisiones usan [_kGraceMargin] de 2 px para permitir rozar sin morir.
 class SnakeGame extends FlameGame {
   final SnakeSkin initialSkin;
   final GameMode mode;
@@ -77,6 +84,18 @@ class SnakeGame extends FlameGame {
   static const double _kMapSize = 2400;
   static const double _kOrbRadius = 7;
   static const int _kTargetOrbCount = 100;
+
+  /// Margen de gracia en píxeles: el jugador puede rozar 2 px sin morir.
+  static const double _kGraceMargin = 2.0;
+
+  /// Radio de segmento del jugador (mismo que en SnakeComponent).
+  static const double _kPlayerSegRadius = 12.0;
+
+  /// Radio de segmento de un bot.
+  static const double _kBotSegRadius = 10.0;
+
+  /// Desplazamiento de cámara al morir (hacia arriba en coords de mundo).
+  static const double _kDeathCameraOffset = 60.0;
 
   SnakeGame({
     required this.initialSkin,
@@ -112,12 +131,15 @@ class SnakeGame extends FlameGame {
     snakeController = SnakeController(speed: 155, initialAngle: 0);
 
     final playerStart = _randomPos();
+    final initSegs = _buildInitialSegments(playerStart, 0, 14);
     snakeComponent = SnakeComponent(
       skin: initialSkin,
       isPlayer: true,
-      initialSegments: _buildInitialSegments(playerStart, 0, 14),
-      segmentRadius: 12,
+      initialSegments: initSegs,
+      segmentRadius: _kPlayerSegRadius,
     );
+    // Inicializar el historial del controlador con los segmentos iniciales.
+    snakeController.resetHistory(initSegs);
     world.add(snakeComponent);
 
     // Tracker de posición para la cámara en el mundo
@@ -150,13 +172,16 @@ class SnakeGame extends FlameGame {
   void _spawnBot(String id, String name, SnakeSkin skin) {
     final angle = _rng.nextDouble() * 2 * pi;
     final pos = _randomPos();
+    final initSegs = _buildInitialSegments(pos, angle, 8);
     final entry = BotEntry(
       id: id,
       name: name,
       skin: skin,
-      initialSegments: _buildInitialSegments(pos, angle, 8),
+      initialSegments: initSegs,
     );
     final ctrl = BotController(botName: name, mapSize: _kMapSize, initialAngle: angle);
+    // Inicializar historial del bot.
+    ctrl.resetHistory(initSegs);
     entry.controller = ctrl;
     bots.add(entry);
     world.add(entry.component);
@@ -178,15 +203,75 @@ class SnakeGame extends FlameGame {
     }
   }
 
+  /// Radio del efecto imán de orbes (px). Rango estrecho para garantizar que
+  /// los orbes atraídos sean consumidos al 100% y no queden desplazados.
+  static const double _kOrbMagnetRadius = 45.0;
+
+  /// Velocidad de atracción magnética (px/s). Alta para que el orbe encaje
+  /// instantáneamente en la cabeza antes de que esta se aleje.
+  static const double _kOrbMagnetSpeed = 650.0;
+
   @override
   void update(double dt) {
     super.update(dt);
-    if (_isGameOver) return;
 
-    // ── Jugador ──────────────────────────────────────────────────────────
+    // Si el jugador está muerto, el mundo sigue corriendo (bots activos).
+    // Solo se salta la lógica DEL JUGADOR.
+    if (!_isGameOver) {
+      _updatePlayer(dt);
+    }
+
+    // Bots siempre activos (juego no se pausa al morir el jugador).
+    if (mode == GameMode.offline) _updateBots(dt);
+
+    // Atracción electromagnética (imán) de orbes hacia cabezas cercanas
+    _updateOrbMagnet(dt);
+
+    // Mantener densidad mínima de orbes
+    if (orbs.length < _kTargetOrbCount ~/ 2) _spawnOrbs(count: 15);
+  }
+
+  /// Aplica el efecto imán a orbes dentro del rango estrecho de captura.
+  /// La alta velocidad de atracción garantiza que todo orbe atraído sea comido de inmediato.
+  void _updateOrbMagnet(double dt) {
+    if (orbs.isEmpty) return;
+
+    final activeHeads = <Vector2>[
+      if (!_isGameOver && snakeComponent.segments.isNotEmpty)
+        snakeComponent.segments.first,
+      for (final bot in bots)
+        if (bot.component.segments.isNotEmpty) bot.component.segments.first,
+    ];
+
+    if (activeHeads.isEmpty) return;
+
+    for (final orb in orbs) {
+      Vector2? closestHead;
+      double minDist = _kOrbMagnetRadius;
+
+      for (final head in activeHeads) {
+        final d = orb.position.distanceTo(head);
+        if (d < minDist) {
+          minDist = d;
+          closestHead = head;
+        }
+      }
+
+      if (closestHead != null && minDist > 1.0) {
+        // Dirección directa hacia la cabeza
+        final dir = (closestHead - orb.position)..normalize();
+        // Atracción rápida y directa: se mueve a alta velocidad hacia la cabeza
+        // garantizando colisión inmediata sin dejar el orbe flotando o desplazado.
+        orb.position.addScaled(dir, _kOrbMagnetSpeed * dt);
+      }
+    }
+  }
+
+  void _updatePlayer(double dt) {
     final nextSegs = snakeController.move(snakeComponent.segments, dt);
 
-    if (_isOutOfBounds(nextSegs.first) || _collidesWithBots(nextSegs.first)) {
+    if (_isOutOfBoundsPlayer(nextSegs.first) ||
+        _collidesWithBotsPlayer(nextSegs.first)) {
       _handleGameOver();
       return;
     }
@@ -213,42 +298,69 @@ class SnakeGame extends FlameGame {
 
     _checkPlayerOrbCollision();
     isBoostingNotifier.value = snakeController.isBoosting;
-
-    // ── Bots ─────────────────────────────────────────────────────────────
-    if (mode == GameMode.offline) _updateBots(dt);
-
-    // Mantener densidad mínima de orbes
-    if (orbs.length < _kTargetOrbCount ~/ 2) _spawnOrbs(count: 15);
   }
 
   void _updateBots(double dt) {
     final orbPositions = orbs.map((o) => o.position).toList();
+
+    // Cabezas de todos los bots (para lógica de intercept entre bots).
+    final allBotHeads = bots
+        .where((b) => b.component.segments.isNotEmpty)
+        .map((b) => b.component.segments.first)
+        .toList();
 
     for (final bot in bots.toList()) {
       final ctrl = bot.controller as BotController;
       final segs = bot.component.segments;
       if (segs.isEmpty) continue;
 
+      // Segmentos rivales: jugador + otros bots.
       final rivals = <Vector2>[
         ...snakeComponent.segments,
         for (final other in bots)
           if (other.id != bot.id) ...other.component.segments,
       ];
 
+      // Cabezas rivales (excluyendo la propia, incluyendo jugador si vivo).
+      final rivalHeads = <Vector2>[
+        if (!_isGameOver && snakeComponent.segments.isNotEmpty)
+          snakeComponent.segments.first,
+        for (final other in bots)
+          if (other.id != bot.id && other.component.segments.isNotEmpty)
+            other.component.segments.first,
+      ];
+
       ctrl.think(
         headPos: segs.first,
         orbPositions: orbPositions,
         rivalSegments: rivals,
+        rivalHeads: rivalHeads,
+        mySegmentCount: segs.length,
         dt: dt,
       );
 
       final nextBotSegs = ctrl.move(segs, dt);
 
-      if (_isOutOfBounds(nextBotSegs.first) ||
-          _collidesWithSnake(nextBotSegs.first, snakeComponent.segments)) {
+      // Colisión bot con borde o cuerpo del jugador → bot muere.
+      if (_isOutOfBoundsBot(nextBotSegs.first) ||
+          _collidesWithSnake(
+              nextBotSegs.first, snakeComponent.segments, _kBotSegRadius, _kPlayerSegRadius)) {
         _killBot(bot);
         continue;
       }
+
+      // Colisión bot con otros bots → bot muere.
+      bool botDied = false;
+      for (final other in bots) {
+        if (other.id == bot.id) continue;
+        if (_collidesWithSnake(
+            nextBotSegs.first, other.component.segments, _kBotSegRadius, _kBotSegRadius)) {
+          _killBot(bot);
+          botDied = true;
+          break;
+        }
+      }
+      if (botDied) continue;
 
       bot.component.updateSegments(nextBotSegs);
       _checkBotOrbCollision(bot);
@@ -269,17 +381,35 @@ class SnakeGame extends FlameGame {
 
   void _killBot(BotEntry bot) {
     final drops = bot.component.segments
-        .where((s) => !_isOutOfBounds(s))
+        .where((s) => !_isOutOfBoundsBot(s))
         .take((bot.component.segments.length * 0.4).round())
         .map((s) => s.clone())
         .toList();
     _spawnOrbsAt(drops);
 
+    // Notificar a los 3 bots más cercanos de los orbes caídos.
+    if (drops.isNotEmpty) {
+      final dropCenter = drops.first;
+      final nearbyBots = bots
+          .where((b) =>
+              b.id != bot.id &&
+              b.component.segments.isNotEmpty &&
+              b.component.segments.first.distanceTo(dropCenter) < 600)
+          .toList()
+        ..sort((a, b2) => a.component.segments.first
+            .distanceTo(dropCenter)
+            .compareTo(b2.component.segments.first.distanceTo(dropCenter)));
+
+      for (final nb in nearbyBots.take(3)) {
+        (nb.controller as BotController).notifyOrbDrop(drops);
+      }
+    }
+
     bots.remove(bot);
     bot.component.removeFromParent();
 
     Future.delayed(const Duration(seconds: 4), () {
-      if (!_isGameOver && isLoaded) {
+      if (isLoaded) {
         final skinRepo = SkinRepository();
         final idx = _rng.nextInt(skinRepo.availableSkins.length);
         _spawnBot(bot.id, 'Bot_${_rng.nextInt(99)}', skinRepo.availableSkins[idx]);
@@ -317,30 +447,107 @@ class SnakeGame extends FlameGame {
     }
   }
 
-  bool _collidesWithBots(Vector2 head) =>
-      bots.any((bot) => _collidesWithSnake(head, bot.component.segments));
+  // ── Colisiones con margen de gracia ──────────────────────────────────────
 
-  bool _collidesWithSnake(Vector2 head, List<Vector2> segs) {
-    for (var i = 3; i < segs.length; i++) {
-      if (head.distanceTo(segs[i]) < 11) return true;
+  /// Colisión de la CABEZA DEL JUGADOR con los segmentos de un bot.
+  /// Usa margen de gracia de [_kGraceMargin] px.
+  bool _collidesWithBotsPlayer(Vector2 head) =>
+      bots.any((bot) => _collidesWithSnake(
+          head, bot.component.segments, _kPlayerSegRadius, _kBotSegRadius,
+          graceMargin: _kGraceMargin));
+
+  /// Colisión genérica entre una cabeza y una lista de segmentos.
+  /// [headRadius] y [bodyRadius] son los radios de cada serpiente.
+  /// [graceMargin] permite rozar sin morir (0 = sin margen).
+  bool _collidesWithSnake(
+    Vector2 head,
+    List<Vector2> segs,
+    double headRadius,
+    double bodyRadius, {
+    double graceMargin = 0,
+    int skipFirst = 3,
+  }) {
+    final threshold = headRadius + bodyRadius - graceMargin;
+    for (var i = skipFirst; i < segs.length; i++) {
+      if (head.distanceTo(segs[i]) < threshold) return true;
     }
     return false;
   }
 
-  bool _isOutOfBounds(Vector2 pos) =>
+  /// Fuera de los límites para el JUGADOR (con margen de gracia de 2 px).
+  bool _isOutOfBoundsPlayer(Vector2 pos) {
+    const border = 5.0;
+    final limit = border - _kGraceMargin; // 3 px — puede rozar el borde
+    return pos.x < limit ||
+        pos.x > _kMapSize - limit ||
+        pos.y < limit ||
+        pos.y > _kMapSize - limit;
+  }
+
+  /// Fuera de los límites para los BOTS (sin margen de gracia extra).
+  bool _isOutOfBoundsBot(Vector2 pos) =>
       pos.x < 5 || pos.x > _kMapSize - 5 ||
       pos.y < 5 || pos.y > _kMapSize - 5;
+
+  // ── Game Over y Respawn ───────────────────────────────────────────────────
 
   void _handleGameOver() {
     if (_isGameOver) return;
     _isGameOver = true;
+
+    // Ocultar la serpiente del jugador sin eliminarla del mundo.
+    snakeComponent.segments.clear();
+
+    // Desplazar cámara hacia arriba suavemente para revelar el mundo activo.
+    if (playerCameraTarget.position.y > _kDeathCameraOffset) {
+      playerCameraTarget.position.y -= _kDeathCameraOffset;
+    }
+
+    // NO llamar pauseEngine() → los bots siguen moviéndose.
     isGameOverNotifier.value = true;
-    pauseEngine();
   }
 
+  /// Reaparece al jugador en una posición aleatoria segura.
+  /// No reinicia el mundo ni los bots.
+  void respawn() {
+    _isGameOver = false;
+    score = 0;
+    scoreNotifier.value = 0;
+    isBoostingNotifier.value = false;
+
+    // Buscar posición segura (lejos de todos los segmentos existentes).
+    Vector2 safePos = _randomPos();
+    const int maxAttempts = 20;
+    for (var i = 0; i < maxAttempts; i++) {
+      final candidate = _randomPos();
+      final allSegs = <Vector2>[
+        for (final bot in bots) ...bot.component.segments,
+      ];
+      final isSafe = allSegs.every((s) => s.distanceTo(candidate) > 200);
+      if (isSafe) {
+        safePos = candidate;
+        break;
+      }
+    }
+
+    final angle = _rng.nextDouble() * 2 * pi;
+    final initSegs = _buildInitialSegments(safePos, angle, 14);
+
+    // Reconstruir el controlador del jugador para resetear historial y boost.
+    snakeController = SnakeController(speed: 155, initialAngle: angle);
+    snakeController.resetHistory(initSegs);
+
+    snakeComponent.updateSegments(initSegs);
+
+    // Reposicionar cámara en la nueva posición del jugador.
+    playerCameraTarget.position.setFrom(safePos);
+
+    isGameOverNotifier.value = false;
+  }
+
+  /// Reset completo del juego (usado al volver al menú principal).
   void reset() {
     _initGame();
-    if (paused) resumeEngine();
   }
 
   void setAngle(double angle) => snakeController.setTargetAngle(angle);
