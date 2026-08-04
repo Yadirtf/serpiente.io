@@ -4,8 +4,7 @@ import 'package:serpiente_io/src/game/controllers/snake_controller.dart';
 
 /// IA para serpientes bot en modo offline.
 ///
-/// ### Máquina de estados ampliada:
-///
+/// ### Máquina de estados:
 /// ```
 /// roam ──► chase ──► intercept
 ///   ▲         │          │
@@ -14,13 +13,6 @@ import 'package:serpiente_io/src/game/controllers/snake_controller.dart';
 ///        evadeRival (emergencia)
 ///        collectDrop (orbes prioritarios tras muerte de bot)
 /// ```
-///
-/// 1. **roam** — deambular buscando orbes cercanos.
-/// 2. **chase** — navegar hacia el orbe más cercano y recogerlo.
-/// 3. **intercept** — cortar el camino a un rival (agresivo).
-/// 4. **evadeEdge** — alejarse del borde con boost de emergencia.
-/// 5. **evadeRival** — evasión por repulsión vectorial de segmentos cercanos.
-/// 6. **collectDrop** — recoger orbes prioritarios dejados por un bot muerto.
 class BotController extends SnakeController {
   final String botName;
   final double mapSize;
@@ -28,6 +20,7 @@ class BotController extends SnakeController {
 
   double _stateTimer = 0;
   double _boostCooldown = 0;
+  double _activeBoostTimer = 0;
   _BotState _state = _BotState.roam;
 
   /// Target position (orb o punto de evasión) hacia donde navega el bot.
@@ -47,7 +40,6 @@ class BotController extends SnakeController {
         );
 
   /// Notifica al bot de orbes prioritarios (drop de bot muerto).
-  /// El bot abandonará su estado actual para ir a recogerlos.
   void notifyOrbDrop(List<Vector2> positions) {
     _priorityOrbPositions.addAll(positions.map((p) => p.clone()));
     if (_state != _BotState.evadeEdge && _state != _BotState.evadeRival) {
@@ -56,13 +48,13 @@ class BotController extends SnakeController {
     }
   }
 
+  /// Activa el boost durante una duración en segundos sin usar temporizadores asíncronos.
+  void triggerBoost(double durationInSeconds) {
+    setBoosting(true);
+    _activeBoostTimer = durationInSeconds;
+  }
+
   /// Decide la siguiente acción del bot dado su estado y el entorno.
-  ///
-  /// [headPos]: posición actual de la cabeza del bot.
-  /// [orbPositions]: posiciones de todos los orbes en el mapa.
-  /// [rivalSegments]: lista de segmentos de TODOS los rivales (incluye player).
-  /// [rivalHeads]: posiciones de las cabezas de rivales (para intercept).
-  /// [mySegmentCount]: número de segmentos propios (para decidir agresividad).
   void think({
     required Vector2 headPos,
     required List<Vector2> orbPositions,
@@ -73,6 +65,14 @@ class BotController extends SnakeController {
   }) {
     _stateTimer += dt;
     if (_boostCooldown > 0) _boostCooldown -= dt;
+
+    // Actualizar temporizador de boost activo (sin Future.delayed)
+    if (_activeBoostTimer > 0) {
+      _activeBoostTimer -= dt;
+      if (_activeBoostTimer <= 0) {
+        setBoosting(false);
+      }
+    }
 
     // ── Evasión de bordes (prioridad máxima) ─────────────────────────────
     const edgeMargin = 120.0;
@@ -88,7 +88,6 @@ class BotController extends SnakeController {
 
     // ── Evasión de colisión rival (prioridad alta) ────────────────────
     if (_state != _BotState.evadeEdge) {
-      // Calcular vector de repulsión de todos los segmentos cercanos.
       final danger = rivalSegments.any((seg) => seg.distanceTo(headPos) < 45);
       if (danger) {
         _state = _BotState.evadeRival;
@@ -173,22 +172,16 @@ class BotController extends SnakeController {
           final dir = _targetPos! - headPos;
           if (dir.length > 2) angle = atan2(dir.y, dir.x);
         }
-        // Boost cuando está cerca del objetivo para recogerlo rápido.
         if (_targetPos != null &&
             _targetPos!.distanceTo(headPos) < 80 &&
             _boostCooldown <= 0) {
-          setBoosting(true);
+          triggerBoost(0.7);
           _boostCooldown = 3.0;
-          Future.delayed(
-              const Duration(milliseconds: 700), () => setBoosting(false));
         }
         break;
 
       case _BotState.intercept:
         if (_targetPos != null) {
-          // Predecir posición futura del rival (80 px adelante en su dirección).
-          // Usamos _targetPos como aproximación de su posición actual.
-          // El punto de intercepción es 80 px delante del rival.
           final interceptPoint = Vector2(
             _targetPos!.x + cos(atan2(
                     _targetPos!.y - headPos.y, _targetPos!.x - headPos.x)) *
@@ -202,12 +195,9 @@ class BotController extends SnakeController {
 
           final distToTarget = headPos.distanceTo(_targetPos!);
           if (distToTarget < 120 && _boostCooldown <= 0) {
-            setBoosting(true);
+            triggerBoost(0.9);
             _boostCooldown = 2.5;
-            Future.delayed(
-                const Duration(milliseconds: 900), () => setBoosting(false));
           }
-          // Abandonar intercept si el rival se fue lejos.
           if (distToTarget > 250) {
             _state = _BotState.roam;
             _targetPos = null;
@@ -217,7 +207,6 @@ class BotController extends SnakeController {
 
       case _BotState.collectDrop:
         if (_priorityOrbPositions.isNotEmpty) {
-          // Ir al orbe prioritario más cercano.
           Vector2? closest;
           double minD = double.infinity;
           for (final p in _priorityOrbPositions) {
@@ -230,23 +219,18 @@ class BotController extends SnakeController {
           if (closest != null) {
             final dir = closest - headPos;
             if (dir.length > 2) angle = atan2(dir.y, dir.x);
-            // Boost para llegar antes que otro bot.
             if (minD < 200 && _boostCooldown <= 0) {
-              setBoosting(true);
+              triggerBoost(0.8);
               _boostCooldown = 2.0;
-              Future.delayed(
-                  const Duration(milliseconds: 800), () => setBoosting(false));
             }
           }
         }
         break;
 
       case _BotState.evadeEdge:
-        // Girar hacia el centro del mapa con boost de emergencia.
         final center = Vector2(mapSize / 2, mapSize / 2);
         final dir = center - headPos;
         angle = atan2(dir.y, dir.x);
-        // Boost si está muy cerca del borde.
         final distToBorder = [
           headPos.x,
           headPos.y,
@@ -254,12 +238,9 @@ class BotController extends SnakeController {
           mapSize - headPos.y,
         ].reduce(min);
         if (distToBorder < 60 && _boostCooldown <= 0) {
-          setBoosting(true);
+          triggerBoost(0.5);
           _boostCooldown = 2.0;
-          Future.delayed(
-              const Duration(milliseconds: 500), () => setBoosting(false));
         }
-        // Salir de evadeEdge cuando está suficientemente lejos del borde.
         if (distToBorder > 150) {
           _state = _BotState.roam;
           _stateTimer = 0;
@@ -267,8 +248,6 @@ class BotController extends SnakeController {
         break;
 
       case _BotState.evadeRival:
-        // Calcular vector de repulsión sumando fuerzas de todos los segmentos
-        // cercanos (< 70 px) → resultado más natural que girar 90° siempre.
         var repulsion = Vector2.zero();
         for (final seg in rivalSegments) {
           final d = seg.distanceTo(headPos);
@@ -280,7 +259,6 @@ class BotController extends SnakeController {
         if (repulsion.length > 0.1) {
           angle = atan2(repulsion.y, repulsion.x);
         } else {
-          // Fallback: girar 90° si no hay datos de repulsión.
           angle = currentAngle + pi / 2;
         }
         if (_stateTimer > 1.2) {
@@ -290,7 +268,6 @@ class BotController extends SnakeController {
         break;
 
       case _BotState.roam:
-        // Pequeña variación aleatoria del ángulo.
         if (_stateTimer > 0.8) {
           angle = currentAngle + (_rng.nextDouble() - 0.5) * 1.2;
           _stateTimer = 0;

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart' show Color, Colors;
 class OrbComponent extends PositionComponent {
   final Color color;
   final double radius;
+  final int value;
 
   double _pulseTimer = 0;
 
@@ -18,6 +19,7 @@ class OrbComponent extends PositionComponent {
     required Vector2 position,
     Color? color,
     this.radius = 7,
+    this.value = 1,
   })  : color = color ?? _randomOrbColor(),
         super(
           position: position,

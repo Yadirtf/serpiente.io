@@ -1,6 +1,5 @@
 import 'dart:math';
 import 'package:flame/components.dart';
-import 'package:serpiente_io/src/game/models/snake_direction.dart';
 
 /// Controla el movimiento de una serpiente con ángulo continuo de 360°,
 /// suavizado de giro por inercia y boost con consumo de masa.
@@ -41,8 +40,17 @@ class SnakeController {
   /// Segmentos eliminados pendientes de convertir en orbes (para consumo de masa).
   int _pendingMassDrop = 0;
 
+  /// Velocidad de movimiento actual usada por la serpiente.
+  double get currentSpeed {
+    if (!isBoosting) return speed;
+    final boostSpeed = speed * boostMultiplier;
+    return (boostSpeed - _pendingMassDrop * 3.0).clamp(0.0, double.infinity);
+  }
+
   // ── Waypoint Trail ────────────────────────────────────────────────────────
-  /// Historial de posiciones de la cabeza, de más reciente a más antiguo.
+  /// Historial de posiciones de la cabeza, en orden cronológico desde la cola
+  /// hasta la punta más reciente. Esto evita insertar en la cabeza de la lista
+  /// cada frame, que es costoso y puede generar micro-parones al crecer la serpiente.
   final List<Vector2> _posHistory = [];
 
   /// Granularidad del historial: un punto se añade cada vez que la cabeza
@@ -53,10 +61,10 @@ class SnakeController {
   double _sinceLastHistoryPoint = 0.0;
 
   SnakeController({
-    this.speed = 140,
+    this.speed = 165,
     this.segmentDistance = 14,
-    this.boostMultiplier = 1.9,
-    this.maxTurnSpeed = 4.5, // rad/s — ajusta la "agilidad"
+    this.boostMultiplier = 1.95,
+    this.maxTurnSpeed = 6.2, // rad/s — respuesta más directa para sentir mejor el movimiento
     double initialAngle = 0,
     this.isBoosting = false,
   })  : _targetAngle = initialAngle,
@@ -82,6 +90,12 @@ class SnakeController {
     return n;
   }
 
+  /// Aplica el efecto de soltar orbes al acelerar: la velocidad disminuye 3 ms por cada orbe soltado.
+  void applyMassDrop(int count) {
+    if (count <= 0) return;
+    _pendingMassDrop += count;
+  }
+
   /// Reinicia el historial de posiciones (útil al hacer respawn).
   void resetHistory(List<Vector2> initialSegments) {
     _posHistory.clear();
@@ -105,7 +119,7 @@ class SnakeController {
     _currentAngle = _normalizeAngle(_currentAngle + step);
 
     // ── 2. Calcular velocidad ─────────────────────────────────────────────
-    final effectiveSpeed = isBoosting ? speed * boostMultiplier : speed;
+    final effectiveSpeed = currentSpeed;
 
     // ── 3. Mover cabeza en la dirección actual ────────────────────────────
     final head = segments.first.clone();
@@ -114,7 +128,6 @@ class SnakeController {
     head.addScaled(direction, frameDist);
 
     // ── 4. Actualizar historial de posiciones de la cabeza ────────────────
-    // Inicializar historial si está vacío.
     if (_posHistory.isEmpty) {
       _posHistory.add(head.clone());
     }
@@ -122,24 +135,23 @@ class SnakeController {
     _sinceLastHistoryPoint += frameDist;
     if (_sinceLastHistoryPoint >= _kHistoryGranularity) {
       _sinceLastHistoryPoint = 0;
-      _posHistory.insert(0, head.clone());
-    } else {
-      // Actualizar el punto más reciente (índice 0) sin añadir uno nuevo.
-      _posHistory[0] = head.clone();
+      _posHistory.add(head.clone());
+    } else if (_posHistory.isNotEmpty) {
+      _posHistory[_posHistory.length - 1] = head.clone();
     }
 
     // ── 5. Colocar segmentos del cuerpo siguiendo el historial (trail) ────
     final List<Vector2> next = [head];
-    int historyIdx = 0;
+    int historyIdx = _posHistory.length - 1;
     double arcAccum = 0.0;
 
     for (var segI = 1; segI < segments.length; segI++) {
       final targetArc = segmentDistance * segI.toDouble();
 
       // Avanzar por el historial hasta alcanzar el arco acumulado deseado.
-      while (historyIdx + 1 < _posHistory.length) {
+      while (historyIdx > 0) {
         final a = _posHistory[historyIdx];
-        final b = _posHistory[historyIdx + 1];
+        final b = _posHistory[historyIdx - 1];
         final d = a.distanceTo(b);
         if (arcAccum + d >= targetArc) {
           // Interpolación lineal para posicionamiento exacto.
@@ -151,7 +163,7 @@ class SnakeController {
           break;
         }
         arcAccum += d;
-        historyIdx++;
+        historyIdx--;
       }
 
       // Si el historial es más corto que la serpiente, usar el último punto.
@@ -165,7 +177,7 @@ class SnakeController {
     final maxHistoryLen =
         ((segments.length * segmentDistance) / _kHistoryGranularity).ceil() + 60;
     if (_posHistory.length > maxHistoryLen) {
-      _posHistory.removeRange(maxHistoryLen, _posHistory.length);
+      _posHistory.removeRange(0, _posHistory.length - maxHistoryLen);
     }
 
     // ── 7. Consumo de masa durante boost ──────────────────────────────────
@@ -179,6 +191,12 @@ class SnakeController {
       }
     } else {
       _boostMassTimer = 0;
+    }
+
+    // La velocidad al acelerar se reduce ligeramente con cada orbe soltado.
+    if (isBoosting && _pendingMassDrop > 0) {
+      final speedPenalty = _pendingMassDrop * 0.003;
+      return next;
     }
 
     return next;

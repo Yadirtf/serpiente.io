@@ -20,6 +20,7 @@ class SnakeComponent extends Component {
   late final Paint _bodyPaint;
   late final Paint _headPaint;
   late final Paint _eyePaint;
+  late final Paint _headGlowPaint;
 
   SnakeComponent({
     required this.skin,
@@ -59,12 +60,14 @@ class SnakeComponent extends Component {
     _eyePaint = Paint()
       ..color = Colors.black87
       ..style = PaintingStyle.fill;
+
+    _headGlowPaint = Paint()
+      ..color = skin.accentColor.withOpacity(0.4)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
   }
 
   void updateSegments(List<Vector2> newSegments) {
-    segments
-      ..clear()
-      ..addAll(newSegments.map((s) => s.clone()));
+    segments = newSegments;
   }
 
   @override
@@ -110,9 +113,7 @@ class SnakeComponent extends Component {
     canvas.drawCircle(
       Offset.zero,
       segmentRadius + 5,
-      Paint()
-        ..color = skin.accentColor.withOpacity(0.4)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+      _headGlowPaint,
     );
 
     // Cabeza principal
