@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:serpiente_io/src/app/app.dart';
 import 'package:serpiente_io/src/data/persistence/game_preferences.dart';
@@ -10,6 +10,10 @@ Future<void> main() async {
     DeviceOrientation.landscapeRight,
   ]);
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  await GamePreferences.initialize();
+  try {
+    await GamePreferences.initialize();
+  } catch (e) {
+    debugPrint('Error en main initialization: $e');
+  }
   runApp(const App());
 }
