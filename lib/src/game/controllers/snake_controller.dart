@@ -40,6 +40,9 @@ class SnakeController {
   /// Segmentos eliminados pendientes de convertir en orbes (para consumo de masa).
   int _pendingMassDrop = 0;
 
+  /// Segmentos mínimos que la serpiente puede mantener al boostear.
+  int minSegmentCount;
+
   /// Velocidad de movimiento actual usada por la serpiente.
   double get currentSpeed {
     if (!isBoosting) return speed;
@@ -67,6 +70,7 @@ class SnakeController {
     this.maxTurnSpeed = 6.2, // rad/s — respuesta más directa para sentir mejor el movimiento
     double initialAngle = 0,
     this.isBoosting = false,
+    this.minSegmentCount = 7,
   })  : _targetAngle = initialAngle,
         _currentAngle = initialAngle;
 
@@ -100,6 +104,7 @@ class SnakeController {
   void resetHistory(List<Vector2> initialSegments) {
     _posHistory.clear();
     _sinceLastHistoryPoint = 0;
+    minSegmentCount = initialSegments.length;
     // Precarga el historial con las posiciones iniciales para que el cuerpo
     // aparezca correctamente posicionado desde el primer frame.
     for (final seg in initialSegments) {
@@ -181,22 +186,17 @@ class SnakeController {
     }
 
     // ── 7. Consumo de masa durante boost ──────────────────────────────────
-    // Cada 0.35 segundos de boost se elimina 1 segmento de la cola.
-    if (isBoosting && next.length > 6) {
+    // Cada 0.35 segundos de boost se elimina 1 segmento de la cola hasta el
+    // mínimo definido por el tamaño inicial de la serpiente.
+    if (isBoosting && next.length > minSegmentCount) {
       _boostMassTimer += dt;
-      if (_boostMassTimer >= _kBoostMassInterval) {
-        _boostMassTimer = 0;
+      while (_boostMassTimer >= _kBoostMassInterval && next.length > minSegmentCount) {
+        _boostMassTimer -= _kBoostMassInterval;
         next.removeLast();
         _pendingMassDrop++;
       }
     } else {
       _boostMassTimer = 0;
-    }
-
-    // La velocidad al acelerar se reduce ligeramente con cada orbe soltado.
-    if (isBoosting && _pendingMassDrop > 0) {
-      final speedPenalty = _pendingMassDrop * 0.003;
-      return next;
     }
 
     return next;

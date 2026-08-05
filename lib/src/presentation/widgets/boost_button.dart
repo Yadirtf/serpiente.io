@@ -74,13 +74,15 @@ class _BoostButtonState extends State<BoostButton>
   @override
   Widget build(BuildContext context) {
     final energy = widget.energyLevel.clamp(0.0, 1.0);
-    final canBoost = energy > 0.05;
+    final canBoost = energy > 0.0;
 
-    return GestureDetector(
-      onTapDown: (_) { if (canBoost) _onPressDown(); },
-      onTapUp: (_) => _onPressUp(),
-      onTapCancel: _onPressUp,
-      onPanEnd: (_) => _onPressUp(),
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) {
+        if (canBoost) _onPressDown();
+      },
+      onPointerUp: (_) => _onPressUp(),
+      onPointerCancel: (_) => _onPressUp(),
       child: ScaleTransition(
         scale: _scaleAnim,
         child: SizedBox(

@@ -31,6 +31,7 @@ class SnakeGame extends FlameGame {
   final ValueNotifier<bool> isGameOverNotifier = ValueNotifier(false);
   final ValueNotifier<int> scoreNotifier = ValueNotifier(0);
   final ValueNotifier<bool> isBoostingNotifier = ValueNotifier(false);
+  final ValueNotifier<int> segmentCountNotifier = ValueNotifier(0);
 
   final _rng = Random();
   static const double _kMapSize = 2400;
@@ -67,6 +68,7 @@ class SnakeGame extends FlameGame {
     isGameOverNotifier.value = false;
     scoreNotifier.value = 0;
     isBoostingNotifier.value = false;
+    segmentCountNotifier.value = 0;
 
     world.removeAll(world.children);
     orbManager.clear();
@@ -76,9 +78,13 @@ class SnakeGame extends FlameGame {
     world.add(ArenaBackgroundComponent(mapSize: _kMapSize));
 
     // 2. Jugador
-    snakeController = SnakeController(speed: 155, initialAngle: 0);
     final playerStart = orbManager.randomPos();
     final initSegs = buildInitialSegments(playerStart, 0, 7);
+    snakeController = SnakeController(
+      speed: 155,
+      initialAngle: 0,
+      minSegmentCount: initSegs.length,
+    );
 
     snakeComponent = SnakeComponent(
       skin: initialSkin,
@@ -87,6 +93,7 @@ class SnakeGame extends FlameGame {
       segmentRadius: CollisionSystem.playerSegRadius,
     );
     snakeController.resetHistory(initSegs);
+    segmentCountNotifier.value = initSegs.length;
     world.add(snakeComponent);
 
     // Cámara
@@ -143,7 +150,7 @@ class SnakeGame extends FlameGame {
     }
 
     snakeComponent.updateSegments(nextSegs);
-
+    segmentCountNotifier.value = snakeComponent.segments.length;
     if (snakeComponent.segments.isNotEmpty) {
       playerCameraTarget.position.setFrom(snakeComponent.segments.first);
     }
@@ -196,6 +203,7 @@ class SnakeGame extends FlameGame {
     _isGameOver = true;
 
     snakeComponent.segments.clear();
+    segmentCountNotifier.value = 0;
 
     if (playerCameraTarget.position.y > _kDeathCameraOffset) {
       playerCameraTarget.position.y -= _kDeathCameraOffset;
@@ -227,9 +235,14 @@ class SnakeGame extends FlameGame {
     final angle = _rng.nextDouble() * 2 * pi;
     final initSegs = buildInitialSegments(safePos, angle, 7);
 
-    snakeController = SnakeController(speed: 155, initialAngle: angle);
+    snakeController = SnakeController(
+      speed: 155,
+      initialAngle: angle,
+      minSegmentCount: initSegs.length,
+    );
     snakeController.resetHistory(initSegs);
     snakeComponent.updateSegments(initSegs);
+    segmentCountNotifier.value = initSegs.length;
     playerCameraTarget.position.setFrom(safePos);
 
     isGameOverNotifier.value = false;

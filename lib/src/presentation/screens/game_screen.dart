@@ -39,18 +39,19 @@ class _GameScreenState extends State<GameScreen> {
       botCount: 8,
     );
 
-    _game.scoreNotifier.addListener(_onScoreChanged);
+    _game.segmentCountNotifier.addListener(_onSegmentCountChanged);
   }
 
   @override
   void dispose() {
-    _game.scoreNotifier.removeListener(_onScoreChanged);
+    _game.segmentCountNotifier.removeListener(_onSegmentCountChanged);
     super.dispose();
   }
 
-  void _onScoreChanged() {
-    final segs = _game.snakeComponent.segments.length;
-    final energy = segs < 6 ? 0.0 : ((segs - 6) / 60).clamp(0.0, 1.0);
+  void _onSegmentCountChanged() {
+    final segs = _game.segmentCountNotifier.value;
+    final minLength = _game.snakeController.minSegmentCount;
+    final energy = segs <= minLength ? 0.0 : ((segs - minLength) / 60).clamp(0.0, 1.0);
     if (mounted) setState(() => _energyLevel = energy);
   }
 
