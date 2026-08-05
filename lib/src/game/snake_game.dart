@@ -3,25 +3,31 @@ import 'dart:ui';
 import 'package:flame/game.dart';
 import 'package:flame/components.dart';
 import 'package:flutter/foundation.dart';
+import 'package:serpiente_io/src/core/events/event_bus.dart';
+import 'package:serpiente_io/src/core/events/game_events.dart';
 import 'package:serpiente_io/src/game/components/arena_background_component.dart';
 import 'package:serpiente_io/src/game/components/snake_component.dart';
-import 'package:serpiente_io/src/game/controllers/snake_controller.dart';
+import 'package:serpiente_io/src/game/input/human_input.dart';
+import 'package:serpiente_io/src/game/logic/snake_logic.dart';
 import 'package:serpiente_io/src/game/models/game_mode.dart';
+import 'package:serpiente_io/src/game/models/snake_model.dart';
+import 'package:serpiente_io/src/game/renderers/snake_renderer.dart';
 import 'package:serpiente_io/src/game/skins/snake_skin.dart';
 import 'package:serpiente_io/src/game/systems/bot_manager.dart';
 import 'package:serpiente_io/src/game/systems/collision_system.dart';
 import 'package:serpiente_io/src/game/systems/orb_manager.dart';
 
-/// Motor principal de juego Serpiente.io coordinando subsistemas modulares.
 class SnakeGame extends FlameGame {
   final SnakeSkin initialSkin;
   final GameMode mode;
   final int botCount;
 
-  late SnakeComponent snakeComponent;
-  late SnakeController snakeController;
-  late PositionComponent playerCameraTarget;
+  late SnakeComponent playerSnake;
+  late HumanInput humanInput;
+  late SnakeLogic playerLogic;
+  late SnakeModel playerModel;
 
+  late PositionComponent playerCameraTarget;
   late CollisionSystem collisionSystem;
   late OrbManager orbManager;
   late BotManager botManager;
@@ -35,7 +41,6 @@ class SnakeGame extends FlameGame {
 
   final _rng = Random();
   static const double _kMapSize = 2400;
-  static const double _kDeathCameraOffset = 60.0;
 
   SnakeGame({
     required this.initialSkin,
@@ -59,6 +64,13 @@ class SnakeGame extends FlameGame {
       orbManager: orbManager,
     );
 
+    // Escuchar eventos
+    EventBus().on<OrbCollectedEvent>().listen((event) {
+      if (event.isPlayer) {
+        _applyOrbScore(event.value);
+      }
+    });
+
     _initGame();
   }
 
@@ -74,39 +86,44 @@ class SnakeGame extends FlameGame {
     orbManager.clear();
     botManager.clear();
 
-    // 1. Fondo de la arena
     world.add(ArenaBackgroundComponent(mapSize: _kMapSize));
 
-    // 2. Jugador
+    // Jugador
     final playerStart = orbManager.randomPos();
-    final initSegs = buildInitialSegments(playerStart, 0, 7);
-    snakeController = SnakeController(
-      speed: 155,
-      initialAngle: 0,
-      minSegmentCount: initSegs.length,
-    );
+    final initSegs = _buildInitialSegments(playerStart, 0, 7);
 
-    snakeComponent = SnakeComponent(
-      skin: initialSkin,
+    playerModel = SnakeModel(
+      id: 'player',
       isPlayer: true,
-      initialSegments: initSegs,
+      skin: initialSkin,
+      segments: initSegs,
       segmentRadius: CollisionSystem.playerSegRadius,
     );
-    snakeController.resetHistory(initSegs);
-    segmentCountNotifier.value = initSegs.length;
-    world.add(snakeComponent);
 
-    // Cámara
+    playerLogic = SnakeLogic();
+    playerLogic.resetHistory(playerModel);
+
+    humanInput = HumanInput();
+    final renderer = SnakeRenderer(playerModel);
+
+    playerSnake = SnakeComponent(
+      model: playerModel,
+      logic: playerLogic,
+      renderer: renderer,
+      input: humanInput,
+    );
+
+    world.add(playerSnake);
+    segmentCountNotifier.value = initSegs.length;
+
     playerCameraTarget = PositionComponent(position: playerStart.clone());
     world.add(playerCameraTarget);
     camera.follow(playerCameraTarget);
 
-    // 3. Bots
     if (mode == GameMode.offline) {
       botManager.spawnBots(botCount);
     }
 
-    // 4. Orbes iniciales
     orbManager.spawnOrbs(count: OrbManager.targetOrbCount);
   }
 
@@ -115,165 +132,111 @@ class SnakeGame extends FlameGame {
     super.update(dt);
 
     if (!_isGameOver) {
-      _updatePlayer(dt);
+      _checkPlayerCollisions();
+      _checkPlayerOrbs();
+      _updateCamera();
+      _handlePlayerMassDrop();
+
+      isBoostingNotifier.value = playerModel.isBoosting && playerModel.segments.length > playerModel.minSegmentCount;
+      segmentCountNotifier.value = playerModel.segments.length;
     }
 
     if (mode == GameMode.offline) {
       botManager.updateBots(
         dt: dt,
-        playerSegments: snakeComponent.segments,
+        playerSegments: playerModel.segments,
         isGameOver: _isGameOver,
       );
     }
 
-    // Actualizar imán de orbes
     final activeHeads = <Vector2>[
-      if (!_isGameOver && snakeComponent.segments.isNotEmpty)
-        snakeComponent.segments.first,
-      for (final bot in botManager.bots)
-        if (bot.component.segments.isNotEmpty) bot.component.segments.first,
+      if (!_isGameOver && playerModel.segments.isNotEmpty) playerModel.segments.first,
+      for (final bot in botManager.bots) if (bot.model.segments.isNotEmpty) bot.model.segments.first,
     ];
     orbManager.updateMagnet(activeHeads, dt);
     orbManager.maintainDensity();
   }
 
-  void _updatePlayer(double dt) {
-    final previousHead = snakeComponent.segments.isNotEmpty
-        ? snakeComponent.segments.first.clone()
-        : null;
-    final nextSegs = snakeController.move(snakeComponent.segments, dt);
+  void _checkPlayerCollisions() {
+    if (playerModel.segments.isEmpty) return;
+    final head = playerModel.segments.first;
 
-    if (collisionSystem.isOutOfBoundsPlayer(nextSegs.first) ||
-        collisionSystem.collidesWithBotsPlayer(nextSegs.first, botManager.bots, previousHead: previousHead)) {
+    if (collisionSystem.isOutOfBoundsPlayer(head) ||
+        collisionSystem.collidesWithBotsPlayer(head, botManager.bots, previousHead: null)) {
       _handleGameOver();
-      return;
     }
+  }
 
-    snakeComponent.updateSegments(nextSegs);
-    segmentCountNotifier.value = snakeComponent.segments.length;
-    if (snakeComponent.segments.isNotEmpty) {
-      playerCameraTarget.position.setFrom(snakeComponent.segments.first);
+  void _checkPlayerOrbs() {
+    if (playerModel.segments.isEmpty) return;
+    final orbValues = orbManager.checkHeadCollisions(playerModel.segments.first, playerModel.segmentRadius);
+    for (final val in orbValues) {
+      playerModel.segments.add(playerModel.segments.last.clone());
+      EventBus().fire(OrbCollectedEvent(collectorId: 'player', isPlayer: true, value: val));
     }
+  }
 
-    // Masa perdida en boost por el jugador
-    final massDrop = snakeController.consumePendingMassDrop();
-    if (massDrop > 0 && snakeComponent.segments.isNotEmpty) {
-      final tail = snakeComponent.segments.last;
+  void _updateCamera() {
+    if (playerModel.segments.isNotEmpty) {
+      playerCameraTarget.position.setFrom(playerModel.segments.first);
+    }
+  }
+
+  void _handlePlayerMassDrop() {
+    if (playerModel.pendingMassDrop > 0) {
+      final tail = playerModel.segments.last;
       final droppedOrbs = List.generate(
-        massDrop,
-        (_) => Vector2(
-          tail.x + (_rng.nextDouble() - 0.5) * 22,
-          tail.y + (_rng.nextDouble() - 0.5) * 22,
-        ),
+        playerModel.pendingMassDrop,
+        (_) => Vector2(tail.x + (_rng.nextDouble() - 0.5) * 22, tail.y + (_rng.nextDouble() - 0.5) * 22),
       );
       orbManager.spawnOrbsAt(droppedOrbs, value: 1);
 
-      // Consumo de puntos proporcional al tamaño de la serpiente para que el score
-      // llegue a 0 exactamente cuando la serpiente vuelve a su tamaño mínimo.
-      final currentSegs = snakeComponent.segments.length;
-      final minSegs = snakeController.minSegmentCount;
+      // Lógica de puntuación por consumo de masa
+      final massDrop = playerModel.pendingMassDrop;
+      final currentSegs = playerModel.segments.length;
+      final minSegs = playerModel.minSegmentCount;
       final extraSegs = currentSegs + massDrop - minSegs;
 
       if (extraSegs > 0) {
         final pointsToRemove = (score * (massDrop / extraSegs)).ceil();
-        applyOrbScore(-max(massDrop, pointsToRemove));
+        _applyOrbScore(-max(massDrop, pointsToRemove));
       } else {
-        applyOrbScore(-score);
+        _applyOrbScore(-score);
       }
-    }
 
-    _checkPlayerOrbCollision();
-    isBoostingNotifier.value =
-        snakeController.isBoosting && snakeComponent.segments.length > snakeController.minSegmentCount;
-  }
-
-  void _checkPlayerOrbCollision() {
-    if (snakeComponent.segments.isEmpty) return;
-    final head = snakeComponent.segments.first;
-
-    final orbValues = orbManager.checkHeadCollisions(head, snakeComponent.segmentRadius);
-    if (orbValues.isEmpty) return;
-
-    if (snakeComponent.segments.isNotEmpty) {
-      snakeComponent.segments.add(snakeComponent.segments.last.clone());
-    }
-
-    for (final orbValue in orbValues) {
-      applyOrbScore(orbValue);
+      playerModel.pendingMassDrop = 0;
     }
   }
 
-  void applyOrbScore(int points) {
-    if (points == 0) return;
+  void _applyOrbScore(int points) {
     score = max(0, score + points);
     scoreNotifier.value = score;
+    EventBus().fire(ScoreChangedEvent(newScore: score, delta: points));
   }
 
   void _handleGameOver() {
     if (_isGameOver) return;
     _isGameOver = true;
-
-    snakeComponent.segments.clear();
-    segmentCountNotifier.value = 0;
-
-    if (playerCameraTarget.position.y > _kDeathCameraOffset) {
-      playerCameraTarget.position.y -= _kDeathCameraOffset;
-    }
-
     isGameOverNotifier.value = true;
+
+    EventBus().fire(SnakeDeadEvent(
+      snakeId: 'player',
+      isPlayer: true,
+      deathPosition: playerModel.segments.first.clone(),
+    ));
+
+    playerModel.segments.clear();
+    segmentCountNotifier.value = 0;
   }
 
   void respawn() {
-    _isGameOver = false;
-    score = 0;
-    scoreNotifier.value = 0;
-    isBoostingNotifier.value = false;
-
-    Vector2 safePos = orbManager.randomPos();
-    const int maxAttempts = 20;
-    for (var i = 0; i < maxAttempts; i++) {
-      final candidate = orbManager.randomPos();
-      final allSegs = <Vector2>[
-        for (final bot in botManager.bots) ...bot.component.segments,
-      ];
-      final isSafe = allSegs.every((s) => s.distanceTo(candidate) > 200);
-      if (isSafe) {
-        safePos = candidate;
-        break;
-      }
-    }
-
-    final angle = _rng.nextDouble() * 2 * pi;
-    final initSegs = buildInitialSegments(safePos, angle, 7);
-
-    snakeController = SnakeController(
-      speed: 155,
-      initialAngle: angle,
-      minSegmentCount: initSegs.length,
-    );
-    snakeController.resetHistory(initSegs);
-    snakeComponent.updateSegments(initSegs);
-    segmentCountNotifier.value = initSegs.length;
-    playerCameraTarget.position.setFrom(safePos);
-
-    isGameOverNotifier.value = false;
+    _initGame();
   }
 
   void reset() => _initGame();
-  void setAngle(double angle) => snakeController.setTargetAngle(angle);
-  void setBoosting(bool value) => snakeController.setBoosting(value);
+  void setAngle(double angle) => humanInput.updateAngle(angle);
+  void setBoosting(bool value) => humanInput.updateBoosting(value);
 
-  List<Vector2> buildInitialSegments(
-    Vector2 head,
-    double angle,
-    int count, {
-    double spacing = 14.0,
-  }) =>
-      List.generate(
-        count,
-        (i) => Vector2(
-          head.x - cos(angle) * i * spacing,
-          head.y - sin(angle) * i * spacing,
-        ),
-      );
+  List<Vector2> _buildInitialSegments(Vector2 head, double angle, int count) =>
+      List.generate(count, (i) => Vector2(head.x - cos(angle) * i * 14.0, head.y - sin(angle) * i * 14.0));
 }

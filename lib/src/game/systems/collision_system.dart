@@ -1,5 +1,5 @@
 import 'package:flame/components.dart';
-import 'package:serpiente_io/src/game/components/bot_snake_component.dart';
+import 'package:serpiente_io/src/game/models/bot_entry.dart';
 
 /// Sistema centralizado de cálculo y verificación de colisiones para Serpiente.io.
 class CollisionSystem {

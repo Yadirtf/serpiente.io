@@ -50,7 +50,7 @@ class _GameScreenState extends State<GameScreen> {
 
   void _onSegmentCountChanged() {
     final segs = _game.segmentCountNotifier.value;
-    final minLength = _game.snakeController.minSegmentCount;
+    final minLength = _game.playerModel.minSegmentCount;
     final energy = segs <= minLength ? 0.0 : ((segs - minLength) / 60).clamp(0.0, 1.0);
     if (mounted) setState(() => _energyLevel = energy);
   }

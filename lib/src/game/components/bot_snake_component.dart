@@ -1,42 +1,41 @@
 import 'package:flame/components.dart';
+import 'package:flutter/material.dart' show Colors, TextStyle, FontWeight, TextAlign;
 import 'package:serpiente_io/src/game/components/snake_component.dart';
-import 'package:serpiente_io/src/game/controllers/bot_controller.dart';
-import 'package:serpiente_io/src/game/skins/snake_skin.dart';
 
-/// Componente visual de una serpiente bot. Extiende `SnakeComponent`
-/// y añade renderizado del nombre del bot sobre la cabeza.
+/// Extensión de SnakeComponent que añade una etiqueta con el nombre del bot.
 class BotSnakeComponent extends SnakeComponent {
   final String name;
+  late final TextComponent _nameTag;
 
   BotSnakeComponent({
     required this.name,
-    required super.skin,
-    required List<Vector2> initialSegments,
-    super.segmentRadius = 10,
-  }) : super(
-          isPlayer: false,
-          initialSegments: initialSegments,
-        );
-}
-
-/// Datos de un bot activo en la sala offline con tipado fuerte.
-class BotEntry {
-  final String id;
-  final String name;
-  late BotSnakeComponent component;
-  late BotController controller;
-
-  BotEntry({
-    required this.id,
-    required this.name,
-    required SnakeSkin skin,
-    required List<Vector2> initialSegments,
-    required this.controller,
+    required super.model,
+    required super.logic,
+    required super.renderer,
+    required super.input,
   }) {
-    component = BotSnakeComponent(
-      name: name,
-      skin: skin,
-      initialSegments: initialSegments,
+    _nameTag = TextComponent(
+      text: name,
+      textRenderer: TextPaint(
+        style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      anchor: Anchor.center,
     );
+    add(_nameTag);
+  }
+
+  @override
+  void update(double dt) {
+    super.update(dt);
+
+    // Posicionar el nombre sobre la cabeza de la serpiente
+    if (model.segments.isNotEmpty) {
+      final head = model.segments.first;
+      _nameTag.position = Vector2(head.x, head.y - model.segmentRadius - 15);
+    }
   }
 }
