@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:serpiente_io/src/presentation/screens/main_menu_screen.dart';
 import 'package:serpiente_io/src/core/constants/app_colors.dart';
+import 'package:serpiente_io/src/presentation/widgets/game_logo.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});

@@ -44,11 +44,15 @@ class SnakeController {
   int minSegmentCount;
 
   /// Velocidad de movimiento actual usada por la serpiente.
+  /// Se ajusta automáticamente si no tiene suficiente masa para boostear.
   double get currentSpeed {
-    if (!isBoosting) return speed;
+    if (!isBoosting || _lastSegmentCount <= minSegmentCount) return speed;
     final boostSpeed = speed * boostMultiplier;
     return (boostSpeed - _pendingMassDrop * 3.0).clamp(0.0, double.infinity);
   }
+
+  /// Último conteo de segmentos visto, usado para validar el boost.
+  int _lastSegmentCount = 0;
 
   // ── Waypoint Trail ────────────────────────────────────────────────────────
   /// Historial de posiciones de la cabeza, en orden cronológico desde la cola
@@ -116,6 +120,7 @@ class SnakeController {
   /// velocidad de giro máxima. Retorna los segmentos actualizados.
   List<Vector2> move(List<Vector2> segments, double dt) {
     if (segments.isEmpty) return segments;
+    _lastSegmentCount = segments.length;
 
     // ── 1. Suavizar ángulo hacia el objetivo ──────────────────────────────
     final angleDiff = _angleDiff(_targetAngle, _currentAngle);

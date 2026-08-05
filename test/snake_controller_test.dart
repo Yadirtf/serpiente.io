@@ -95,10 +95,14 @@ void main() {
       expect(segments.last.distanceTo(segments.first), closeTo(84.0, 0.001));
     });
 
-    test('reduces boost speed by 3 units per pending dropped orb', () {
+    test('reduces boost speed by 3 units per pending dropped orb if has enough segments', () {
       final controller = SnakeController(speed: 100);
       controller.setBoosting(true);
       controller.applyMassDrop(1);
+
+      // Simular que tiene suficientes segmentos para boostear (min es 7 por defecto)
+      controller.move(List.generate(10, (_) => Vector2.zero()), 0.01);
+
       expect(controller.currentSpeed, closeTo(192.0, 0.001));
     });
   });

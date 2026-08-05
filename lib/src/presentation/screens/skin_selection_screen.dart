@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:serpiente_io/src/core/constants/app_colors.dart';
 import 'package:serpiente_io/src/game/skins/skin_repository.dart';
 import 'package:serpiente_io/src/game/skins/snake_skin.dart';
+import 'package:serpiente_io/src/presentation/widgets/game_logo.dart';
 
 class SkinSelectionScreen extends StatelessWidget {
   final String selectedSkinId;

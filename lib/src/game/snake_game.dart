@@ -167,13 +167,24 @@ class SnakeGame extends FlameGame {
         ),
       );
       orbManager.spawnOrbsAt(droppedOrbs, value: 1);
-      for (var i = 0; i < massDrop; i++) {
-        applyOrbScore(-1);
+
+      // Consumo de puntos proporcional al tamaño de la serpiente para que el score
+      // llegue a 0 exactamente cuando la serpiente vuelve a su tamaño mínimo.
+      final currentSegs = snakeComponent.segments.length;
+      final minSegs = snakeController.minSegmentCount;
+      final extraSegs = currentSegs + massDrop - minSegs;
+
+      if (extraSegs > 0) {
+        final pointsToRemove = (score * (massDrop / extraSegs)).ceil();
+        applyOrbScore(-max(massDrop, pointsToRemove));
+      } else {
+        applyOrbScore(-score);
       }
     }
 
     _checkPlayerOrbCollision();
-    isBoostingNotifier.value = snakeController.isBoosting;
+    isBoostingNotifier.value =
+        snakeController.isBoosting && snakeComponent.segments.length > snakeController.minSegmentCount;
   }
 
   void _checkPlayerOrbCollision() {
