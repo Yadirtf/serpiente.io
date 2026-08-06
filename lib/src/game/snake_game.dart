@@ -145,9 +145,11 @@ class SnakeGame extends FlameGame {
       botManager.updateBots(
         dt: dt,
         playerSegments: playerModel.segments,
+        playerAngle: playerModel.currentAngle,
         isGameOver: _isGameOver,
       );
     }
+
 
     final activeHeads = <Vector2>[
       if (!_isGameOver && playerModel.segments.isNotEmpty) playerModel.segments.first,
@@ -217,6 +219,9 @@ class SnakeGame extends FlameGame {
   void _handleGameOver() {
     if (_isGameOver) return;
     _isGameOver = true;
+
+    // Aseguramos que el estado de Game Over se notifique ANTES de limpiar segmentos
+    // para evitar inconsistencias visuales en el último frame.
     isGameOverNotifier.value = true;
 
     EventBus().fire(SnakeDeadEvent(
@@ -225,6 +230,7 @@ class SnakeGame extends FlameGame {
       deathPosition: playerModel.segments.first.clone(),
     ));
 
+    // Limpiar lógica del jugador
     playerModel.segments.clear();
     segmentCountNotifier.value = 0;
   }

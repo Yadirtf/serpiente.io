@@ -88,6 +88,7 @@ class BotManager {
   void updateBots({
     required double dt,
     required List<Vector2> playerSegments,
+    double playerAngle = 0,
     required bool isGameOver,
   }) {
     final orbPositions = orbManager.orbs.map((o) => o.position).toList();
@@ -102,20 +103,32 @@ class BotManager {
         for (final other in bots) if (other.id != bot.id) ...other.model.segments,
       ];
 
-      final rivalHeads = <Vector2>[
-        if (!isGameOver && playerSegments.isNotEmpty) playerSegments.first,
-        for (final other in bots) if (other.id != bot.id && other.model.segments.isNotEmpty) other.model.segments.first,
-      ];
+      final rivalHeads = <Vector2>[];
+      final rivalHeadAngles = <double>[];
+
+      if (!isGameOver && playerSegments.isNotEmpty) {
+        rivalHeads.add(playerSegments.first);
+        rivalHeadAngles.add(playerAngle);
+      }
+
+      for (final other in bots) {
+        if (other.id != bot.id && other.model.segments.isNotEmpty) {
+          rivalHeads.add(other.model.segments.first);
+          rivalHeadAngles.add(other.model.currentAngle);
+        }
+      }
 
       input.think(
         headPos: model.segments.first,
         orbPositions: orbPositions,
         rivalSegments: rivals,
         rivalHeads: rivalHeads,
+        rivalHeadAngles: rivalHeadAngles,
         mySegmentCount: model.segments.length,
         dt: dt,
         currentAngle: model.currentAngle,
       );
+
 
       final previousHead = model.segments.isNotEmpty ? model.segments.first.clone() : null;
 

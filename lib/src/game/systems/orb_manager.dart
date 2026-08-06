@@ -10,7 +10,7 @@ class OrbManager {
   final Random _rng = Random();
 
   static const double orbRadius = 7.0;
-  static const int targetOrbCount = 100;
+  static const int targetOrbCount = 400;
   static const double magnetRadius = 45.0;
   static const double magnetSpeed = 650.0;
 
@@ -47,8 +47,8 @@ class OrbManager {
 
   /// Mantiene la densidad mínima de orbes en el mapa.
   void maintainDensity() {
-    if (orbs.length < targetOrbCount ~/ 2) {
-      spawnOrbs(count: 15);
+    if (orbs.length < targetOrbCount * 0.8) {
+      spawnOrbs(count: 30);
     }
   }
 

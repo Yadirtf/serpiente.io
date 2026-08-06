@@ -33,7 +33,7 @@ class SnakeModel {
     this.segmentRadius = 11.0,
     this.currentAngle = 0.0,
     this.targetAngle = 0.0,
-    this.speed = 165.0,
+    this.speed = 195.0,
     this.isBoosting = false,
     this.minSegmentCount = 7,
     this.score = 0,
